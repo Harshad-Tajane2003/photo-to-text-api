@@ -1,37 +1,52 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
-from PIL import Image
-import io
+from PIL import Image, ImageEnhance
+import pytesseract
+import shutil
 import os
-
-from utils.ocr import extract_text  # Import from ocr.py
+import uuid
 
 app = FastAPI()
 
+# Tell pytesseract where Tesseract-OCR is installed (update path if needed)
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+# Create uploads directory if it doesn't exist
+UPLOAD_DIR = "static/uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# API Endpoint: Extract text from uploaded image
 @app.post("/extract-text/")
-async def extract_text_from_upload(file: UploadFile = File(...)):
-    """
-    Endpoint to receive an image file and return extracted text using OCR.
-    """
+async def extract_text(
+    image: UploadFile = File(...), 
+    language: str = Form("eng")  # Default language is English
+):
     try:
-        # Read the uploaded file into memory
-        contents = await file.read()
+        # Step 1: Save uploaded image to temporary file
+        file_ext = image.filename.split('.')[-1]
+        temp_filename = f"{uuid.uuid4()}.{file_ext}"
+        temp_path = os.path.join(UPLOAD_DIR, temp_filename)
 
-        # Open the image using Pillow
-        image = Image.open(io.BytesIO(contents))
+        with open(temp_path, "wb") as buffer:
+            shutil.copyfileobj(image.file, buffer)
 
-        # Save the uploaded image temporarily
-        temp_path = "uploaded_image.png"
-        image.save(temp_path)
+        # Step 2: Open the uploaded image
+        img = Image.open(temp_path)
 
-        # Use the reusable OCR function
-        text = extract_text(temp_path)
+        # Step 3: Preprocess image (convert to grayscale and enhance contrast)
+        img = img.convert("L")  # Convert to grayscale
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(2.0)  # Increase contrast (try values from 1.5 to 3.0)
 
-        # Remove the temporary file
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        # Step 4: Run OCR with specified language
+        extracted_text = pytesseract.image_to_string(img, lang=language)
 
-        return JSONResponse(content={"text": text})
+        # Step 5: Delete the temporary image file
+        os.remove(temp_path)
 
+        # Step 6: Return the extracted text as JSON response
+        return JSONResponse(content={"extracted_text": extracted_text})
+    
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        # Handle any error that occurs during the process
+        return JSONResponse(status_code=500, content={"error": str(e)})
